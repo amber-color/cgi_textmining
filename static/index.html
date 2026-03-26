@@ -98,6 +98,17 @@
 <script src="d3.layout.cloud.min.js"></script>
 
 <script>
+// ===== D3.js ロード確認 =====
+window.addEventListener('DOMContentLoaded', function() {
+  if (typeof d3 === 'undefined') {
+    document.getElementById('error-msg').textContent =
+      'D3.js が読み込めていません。static/d3.min.js を確認してください。';
+    document.getElementById('error-msg').style.display = 'block';
+    document.getElementById('analyzeBtn').disabled = true;
+    document.getElementById('result-placeholder').style.display = 'none';
+  }
+});
+
 // ===== 状態管理 =====
 let currentMode = 'wordcloud';
 const CGI_URL = '../cgi-bin/textmine.py';
@@ -167,11 +178,17 @@ async function analyze() {
       return;
     }
 
-    if (currentMode === 'wordcloud') {
-      renderWordcloud(data);
-    } else {
-      renderNetwork(data);
+    setLoading(false);
+    try {
+      if (currentMode === 'wordcloud') {
+        renderWordcloud(data);
+      } else {
+        renderNetwork(data);
+      }
+    } catch (re) {
+      showError('描画エラー: ' + re.message);
     }
+    return;
 
   } catch (e) {
     // redirect:'error' でリダイレクトが起きるとTypeErrorになる
