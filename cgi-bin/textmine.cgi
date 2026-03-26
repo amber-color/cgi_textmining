@@ -7,6 +7,12 @@ import json
 import cgi
 import cgitb
 
+# Windows CGI環境でstdinをバイナリモードに設定
+if sys.platform == 'win32':
+    import msvcrt
+    msvcrt.setmode(sys.stdin.fileno(), os.O_BINARY)
+    msvcrt.setmode(sys.stdout.fileno(), os.O_BINARY)
+
 # libフォルダをsys.pathの先頭に追加
 lib_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'lib')
 sys.path.insert(0, lib_path)
@@ -139,15 +145,21 @@ def build_network(text, pos_filter, stopwords):
 
 
 def main():
-    method = os.environ.get('REQUEST_METHOD', 'GET').upper()
+    method = os.environ.get('REQUEST_METHOD', '').upper()
 
     # OPTIONSプリフライト対応
     if method == 'OPTIONS':
         output_headers()
         return
 
+    # GETはヘルスチェック用に200を返す
+    if method == 'GET':
+        output_headers()
+        print(json.dumps({"status": "ok", "message": "textmine.cgi is running. Use POST to analyze text."}, ensure_ascii=False))
+        return
+
     if method != 'POST':
-        output_error("POSTメソッドのみ受け付けます")
+        output_error("POSTメソッドのみ受け付けます (received: {})".format(method or "unknown"))
         return
 
     try:

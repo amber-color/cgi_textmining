@@ -151,8 +151,14 @@ async function analyze() {
     const response = await fetch(CGI_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json; charset=UTF-8' },
-      body: JSON.stringify(payload)
+      body: JSON.stringify(payload),
+      redirect: 'error'   // リダイレクトによるPOST→GET変換を防ぐ
     });
+
+    if (!response.ok) {
+      showError(`サーバーエラー: HTTP ${response.status} ${response.statusText}`);
+      return;
+    }
 
     const data = await response.json();
 
@@ -168,7 +174,12 @@ async function analyze() {
     }
 
   } catch (e) {
-    showError('通信エラーが発生しました: ' + e.message);
+    // redirect:'error' でリダイレクトが起きるとTypeErrorになる
+    if (e instanceof TypeError && e.message.includes('redirect')) {
+      showError('CGIへのリクエストがリダイレクトされました。サーバーのURL設定を確認してください。');
+    } else {
+      showError('通信エラーが発生しました: ' + e.message);
+    }
   } finally {
     setLoading(false);
   }
