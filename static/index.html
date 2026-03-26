@@ -1,0 +1,424 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>日本語テキストマイニング</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header>
+  <h1>日本語テキストマイニング</h1>
+  <p>テキストを入力して形態素解析・可視化します</p>
+</header>
+
+<div class="container">
+
+  <!-- 入力フォーム -->
+  <div class="card">
+    <h2>テキスト入力</h2>
+    <div class="control-group" style="margin-bottom:16px;">
+      <label for="inputText">分析対象テキスト</label>
+      <textarea id="inputText" placeholder="ここに分析したい日本語テキストを入力してください。&#10;複数の文を入力すると共起ネットワーク分析の精度が上がります。"></textarea>
+    </div>
+
+    <div class="controls">
+      <div class="control-group">
+        <label>表示モード</label>
+        <div class="mode-buttons">
+          <button class="mode-btn active" data-mode="wordcloud" onclick="setMode('wordcloud')">
+            ワードクラウド
+          </button>
+          <button class="mode-btn" data-mode="network" onclick="setMode('network')">
+            共起ネットワーク
+          </button>
+        </div>
+      </div>
+
+      <div class="control-group">
+        <label>対象品詞</label>
+        <div class="checkbox-group">
+          <label><input type="checkbox" id="pos-noun" value="名詞" checked> 名詞</label>
+          <label><input type="checkbox" id="pos-verb" value="動詞"> 動詞</label>
+          <label><input type="checkbox" id="pos-adj" value="形容詞"> 形容詞</label>
+        </div>
+      </div>
+
+      <div class="control-group" style="grid-column: 1 / -1;">
+        <label for="stopwords">ストップワード（カンマ区切り）</label>
+        <input type="text" id="stopwords" placeholder="例: する, ある, なる, いる, こと, もの">
+      </div>
+    </div>
+
+    <button class="btn-analyze" onclick="analyze()" id="analyzeBtn">
+      分析を実行
+    </button>
+
+    <div id="loading">
+      <div class="spinner"></div>
+      <span>形態素解析中...</span>
+    </div>
+  </div>
+
+  <!-- 結果表示 -->
+  <div class="card">
+    <h2 id="result-title">分析結果</h2>
+
+    <div id="error-msg"></div>
+
+    <div id="result-area">
+      <div id="result-placeholder">
+        <svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <rect x="3" y="3" width="18" height="18" rx="2"/>
+          <path d="M3 9h18M9 21V9"/>
+        </svg>
+        <span>テキストを入力して「分析を実行」ボタンを押してください</span>
+      </div>
+
+      <div id="viz-container">
+        <!-- ワードクラウド用 -->
+        <svg id="wordcloud-svg" style="display:none;"></svg>
+        <!-- 共起ネットワーク用 -->
+        <svg id="network-svg" style="display:none;"></svg>
+      </div>
+    </div>
+
+    <div id="stats"></div>
+  </div>
+
+</div>
+
+<!-- Tooltip -->
+<div class="tooltip" id="tooltip"></div>
+
+<!-- D3.js (ローカル) -->
+<script src="d3.min.js"></script>
+<!-- d3-cloud (ローカル) -->
+<script src="d3.layout.cloud.min.js"></script>
+
+<script>
+// ===== 状態管理 =====
+let currentMode = 'wordcloud';
+const CGI_URL = '../cgi-bin/textmine.cgi';
+
+// ===== モード切替 =====
+function setMode(mode) {
+  currentMode = mode;
+  document.querySelectorAll('.mode-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.mode === mode);
+  });
+}
+
+// ===== ストップワード解析 =====
+function getStopwords() {
+  const raw = document.getElementById('stopwords').value;
+  return raw.split(',').map(s => s.trim()).filter(s => s.length > 0);
+}
+
+// ===== 選択品詞取得 =====
+function getPos() {
+  const checkboxes = document.querySelectorAll('.checkbox-group input[type="checkbox"]:checked');
+  return Array.from(checkboxes).map(cb => cb.value);
+}
+
+// ===== 分析実行 =====
+async function analyze() {
+  const text = document.getElementById('inputText').value.trim();
+  if (!text) {
+    showError('テキストを入力してください。');
+    return;
+  }
+
+  const pos = getPos();
+  if (pos.length === 0) {
+    showError('対象品詞を1つ以上選択してください。');
+    return;
+  }
+
+  setLoading(true);
+  hideError();
+  hideViz();
+
+  const payload = {
+    text: text,
+    mode: currentMode,
+    pos: pos,
+    stopwords: getStopwords()
+  };
+
+  try {
+    const response = await fetch(CGI_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json; charset=UTF-8' },
+      body: JSON.stringify(payload)
+    });
+
+    const data = await response.json();
+
+    if (data.error) {
+      showError('エラー: ' + data.error);
+      return;
+    }
+
+    if (currentMode === 'wordcloud') {
+      renderWordcloud(data);
+    } else {
+      renderNetwork(data);
+    }
+
+  } catch (e) {
+    showError('通信エラーが発生しました: ' + e.message);
+  } finally {
+    setLoading(false);
+  }
+}
+
+// ===== UI制御 =====
+function setLoading(flag) {
+  document.getElementById('loading').classList.toggle('visible', flag);
+  document.getElementById('analyzeBtn').disabled = flag;
+}
+
+function showError(msg) {
+  const el = document.getElementById('error-msg');
+  el.textContent = msg;
+  el.style.display = 'block';
+}
+
+function hideError() {
+  document.getElementById('error-msg').style.display = 'none';
+}
+
+function hideViz() {
+  document.getElementById('result-placeholder').style.display = 'flex';
+  document.getElementById('viz-container').classList.remove('visible');
+  document.getElementById('wordcloud-svg').style.display = 'none';
+  document.getElementById('network-svg').style.display = 'none';
+  document.getElementById('stats').classList.remove('visible');
+}
+
+function showViz(svgId) {
+  document.getElementById('result-placeholder').style.display = 'none';
+  document.getElementById('viz-container').classList.add('visible');
+  document.getElementById('wordcloud-svg').style.display = svgId === 'wordcloud-svg' ? 'block' : 'none';
+  document.getElementById('network-svg').style.display = svgId === 'network-svg' ? 'block' : 'none';
+}
+
+// ===== ワードクラウド描画 =====
+function renderWordcloud(data) {
+  const words = data.words || [];
+  if (words.length === 0) {
+    showError('単語が抽出されませんでした。テキストや品詞設定を確認してください。');
+    return;
+  }
+
+  const svg = d3.select('#wordcloud-svg');
+  svg.selectAll('*').remove();
+
+  const W = svg.node().parentElement.clientWidth || 800;
+  const H = 460;
+  svg.attr('width', W).attr('height', H);
+
+  const maxVal = d3.max(words, d => d.value);
+  const minVal = d3.min(words, d => d.value);
+  const fontScale = d3.scaleLinear()
+    .domain([minVal, maxVal])
+    .range([14, Math.min(80, W / 8)]);
+
+  const palette = [
+    '#e74c3c','#e67e22','#f39c12','#2ecc71','#1abc9c',
+    '#3498db','#2980b9','#9b59b6','#8e44ad','#e91e63',
+    '#00bcd4','#4caf50','#ff5722','#607d8b','#795548'
+  ];
+
+  const colorScale = d3.scaleOrdinal(palette);
+
+  const layout = d3.layout.cloud()
+    .size([W, H])
+    .words(words.map(d => ({ text: d.text, size: fontScale(d.value), value: d.value })))
+    .padding(5)
+    .rotate(() => (Math.random() < 0.7 ? 0 : 90))
+    .font('sans-serif')
+    .fontSize(d => d.size)
+    .on('end', drawn);
+
+  layout.start();
+
+  function drawn(cloudWords) {
+    const g = svg.append('g')
+      .attr('transform', `translate(${W / 2},${H / 2})`);
+
+    const tooltip = document.getElementById('tooltip');
+
+    g.selectAll('text')
+      .data(cloudWords)
+      .enter().append('text')
+        .style('font-family', 'sans-serif')
+        .style('font-size', d => d.size + 'px')
+        .style('fill', (d, i) => colorScale(i))
+        .style('cursor', 'default')
+        .attr('text-anchor', 'middle')
+        .attr('transform', d => `translate(${d.x},${d.y}) rotate(${d.rotate})`)
+        .text(d => d.text)
+        .on('mousemove', function(event, d) {
+          tooltip.style.opacity = '1';
+          tooltip.style.left = (event.pageX + 12) + 'px';
+          tooltip.style.top = (event.pageY - 28) + 'px';
+          tooltip.textContent = `${d.text}: ${d.value}回`;
+        })
+        .on('mouseleave', () => { tooltip.style.opacity = '0'; });
+  }
+
+  showViz('wordcloud-svg');
+  const stats = document.getElementById('stats');
+  stats.textContent = `表示単語数: ${words.length} 語`;
+  stats.classList.add('visible');
+  document.getElementById('result-title').textContent = 'ワードクラウド';
+}
+
+// ===== 共起ネットワーク描画 =====
+function renderNetwork(data) {
+  const nodes = data.nodes || [];
+  const links = data.links || [];
+
+  if (nodes.length === 0) {
+    showError('単語が抽出されませんでした。テキストや品詞設定を確認してください。');
+    return;
+  }
+
+  const svg = d3.select('#network-svg');
+  svg.selectAll('*').remove();
+
+  const W = svg.node().parentElement.clientWidth || 800;
+  const H = 520;
+  svg.attr('width', W).attr('height', H);
+
+  // スケール
+  const maxCount = d3.max(nodes, d => d.count) || 1;
+  const minCount = d3.min(nodes, d => d.count) || 1;
+  const nodeRadius = d3.scaleLinear()
+    .domain([minCount, maxCount])
+    .range([8, 32]);
+
+  const maxLink = d3.max(links, d => d.value) || 1;
+  const linkWidth = d3.scaleLinear()
+    .domain([1, maxLink])
+    .range([1, 8]);
+
+  const palette = [
+    '#3498db','#e74c3c','#2ecc71','#9b59b6','#f39c12',
+    '#1abc9c','#e67e22','#e91e63','#00bcd4','#8bc34a'
+  ];
+  const colorScale = d3.scaleOrdinal(palette);
+
+  // ズーム設定
+  const zoom = d3.zoom()
+    .scaleExtent([0.3, 3])
+    .on('zoom', (event) => {
+      g.attr('transform', event.transform);
+    });
+  svg.call(zoom);
+
+  const g = svg.append('g');
+
+  // Force simulation
+  const simulation = d3.forceSimulation(nodes)
+    .force('link', d3.forceLink(links).id(d => d.id).distance(d => 80 + 50 / (d.value || 1)).strength(0.6))
+    .force('charge', d3.forceManyBody().strength(-200))
+    .force('center', d3.forceCenter(W / 2, H / 2))
+    .force('collision', d3.forceCollide().radius(d => nodeRadius(d.count) + 8));
+
+  // エッジ描画
+  const link = g.append('g').attr('class', 'links')
+    .selectAll('line')
+    .data(links)
+    .enter().append('line')
+      .attr('stroke', '#aab8cc')
+      .attr('stroke-opacity', 0.6)
+      .attr('stroke-width', d => linkWidth(d.value));
+
+  // ノードグループ
+  const nodeG = g.append('g').attr('class', 'nodes')
+    .selectAll('g')
+    .data(nodes)
+    .enter().append('g')
+      .call(d3.drag()
+        .on('start', dragStarted)
+        .on('drag', dragged)
+        .on('end', dragEnded));
+
+  // ノード円
+  nodeG.append('circle')
+    .attr('r', d => nodeRadius(d.count))
+    .attr('fill', (d, i) => colorScale(i % palette.length))
+    .attr('stroke', '#fff')
+    .attr('stroke-width', 2)
+    .style('cursor', 'grab');
+
+  // ラベル
+  nodeG.append('text')
+    .text(d => d.id)
+    .attr('text-anchor', 'middle')
+    .attr('dy', d => nodeRadius(d.count) + 13)
+    .attr('font-size', d => Math.max(10, Math.min(14, nodeRadius(d.count) * 0.7)) + 'px')
+    .attr('font-family', 'sans-serif')
+    .attr('fill', '#333')
+    .attr('pointer-events', 'none');
+
+  // Tooltip
+  const tooltip = document.getElementById('tooltip');
+  nodeG
+    .on('mousemove', function(event, d) {
+      tooltip.style.opacity = '1';
+      tooltip.style.left = (event.pageX + 12) + 'px';
+      tooltip.style.top = (event.pageY - 28) + 'px';
+      tooltip.textContent = `${d.id}: ${d.count}回出現`;
+    })
+    .on('mouseleave', () => { tooltip.style.opacity = '0'; });
+
+  // シミュレーション更新
+  simulation.on('tick', () => {
+    link
+      .attr('x1', d => d.source.x)
+      .attr('y1', d => d.source.y)
+      .attr('x2', d => d.target.x)
+      .attr('y2', d => d.target.y);
+
+    nodeG.attr('transform', d => `translate(${d.x},${d.y})`);
+  });
+
+  function dragStarted(event, d) {
+    if (!event.active) simulation.alphaTarget(0.3).restart();
+    d.fx = d.x;
+    d.fy = d.y;
+  }
+
+  function dragged(event, d) {
+    d.fx = event.x;
+    d.fy = event.y;
+  }
+
+  function dragEnded(event, d) {
+    if (!event.active) simulation.alphaTarget(0);
+    d.fx = null;
+    d.fy = null;
+  }
+
+  showViz('network-svg');
+  const stats = document.getElementById('stats');
+  stats.textContent = `ノード: ${nodes.length} 語 / エッジ: ${links.length} 本`;
+  stats.classList.add('visible');
+  document.getElementById('result-title').textContent = '共起ネットワーク';
+}
+
+// ===== Enterキーで実行（Shift+Enter改行） =====
+document.getElementById('inputText').addEventListener('keydown', function(e) {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    analyze();
+  }
+});
+</script>
+</body>
+</html>
